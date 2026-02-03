@@ -1,112 +1,442 @@
-#!/usr/bin/env bash
-# src2text - Concatenate source files into single text output
-# Usage: src2text [python|go|rust|js|typescript|auto] [max_lines_per_file]
+#!/bin/bash
+# src2text v2 - Smart packaging for Claude
+# https://github.com/falkowich/src2text
 
 set -euo pipefail
 
-# Parse arguments
-LANG="${1:-auto}"
-MAX_LINES="${2:-0}"
+VERSION="2.0.0"
 
-# Auto-detect language
-if [[ "$LANG" == "auto" ]]; then
-    if [[ -f "Cargo.toml" ]]; then 
-        LANG="rust"
-    elif [[ -f "go.mod" ]]; then 
-        LANG="go"
-    elif [[ -f "package.json" ]]; then
-        if [[ -f "tsconfig.json" ]] || grep -q '"typescript"' package.json 2>/dev/null; then
-            LANG="typescript"
-        else
-            LANG="js"
-        fi
-    elif [[ -f "pyproject.toml" ]] || [[ -f "setup.py" ]] || [[ -f "requirements.txt" ]]; then 
-        LANG="python"
-    else 
-        LANG="python"
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Usage
+usage() {
+    cat <<EOF
+src2text v${VERSION} - Package your codebase for Claude
+
+Usage:
+    src2text [language] [output_name]
+
+Arguments:
+    language      Optional: python|go|rust|typescript (auto-detected if omitted)
+    output_name   Optional: custom name for output file
+
+Examples:
+    src2text                    # Auto-detect language
+    src2text python             # Force Python
+    src2text rust myproject     # Rust with custom name
+
+Output:
+    /tmp/YYYYMMDD-HHMM-projectname.tar.gz
+
+Options:
+    -h, --help     Show this help
+    -v, --version  Show version
+EOF
+}
+
+# Detect language
+detect_language() {
+    if [ -n "${1:-}" ]; then
+        echo "$1"
+        return
     fi
-    echo "Auto-detected: $LANG" >&2
-fi
+    
+    if [ -f "pyproject.toml" ] || [ -f "setup.py" ] || find . -maxdepth 2 -name "*.py" 2>/dev/null | grep -q .; then
+        echo "python"
+    elif [ -f "go.mod" ] || find . -maxdepth 2 -name "*.go" 2>/dev/null | grep -q .; then
+        echo "go"
+    elif [ -f "Cargo.toml" ] || find . -maxdepth 2 -name "*.rs" 2>/dev/null | grep -q .; then
+        echo "rust"
+    elif [ -f "package.json" ] || [ -f "tsconfig.json" ] || find . -maxdepth 2 -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" 2>/dev/null | grep -q .; then
+        echo "typescript"
+    else
+        echo "unknown"
+    fi
+}
 
-# Build find command based on language
-case "$LANG" in
-    python)
-        FIND_CMD='find . -type f -name "*.py"'
-        EXCLUDE='-not -path "*/venv/*" -not -path "*/__pycache__/*" -not -path "*/migrations/*" -not -path "*/.venv/*" -not -path "*/site-packages/*" -not -path "*/.pytest_cache/*"'
-        ;;
-    go)
-        FIND_CMD='find . -type f -name "*.go"'
-        EXCLUDE='-not -path "*/vendor/*" -not -path "*/testdata/*"'
-        ;;
-    rust)
-        FIND_CMD='find . -type f -name "*.rs"'
-        EXCLUDE='-not -path "*/target/*" -not -path "*/vendor/*"'
-        ;;
-    js)
-        FIND_CMD='find . -type f \( -name "*.js" -o -name "*.jsx" -o -name "*.svelte" \)'
-        EXCLUDE='-not -path "*/node_modules/*" -not -path "*/dist/*" -not -path "*/build/*" -not -path "*/.svelte-kit/*" -not -path "*/.next/*"'
-        ;;
-    typescript)
-        FIND_CMD='find . -type f \( -name "*.ts" -o -name "*.tsx" \)'
-        EXCLUDE='-not -path "*/node_modules/*" -not -path "*/dist/*" -not -path "*/build/*" -not -path "*/.next/*"'
-        ;;
-    *)
-        echo "Error: Unknown language '$LANG'" >&2
-        echo "" >&2
-        echo "Usage: src2text [python|go|rust|js|typescript|auto] [max_lines]" >&2
+# Language-specific configuration
+get_file_patterns() {
+    case "$1" in
+        python)
+            echo "*.py"
+            ;;
+        go)
+            echo "*.go"
+            ;;
+        rust)
+            echo "*.rs"
+            ;;
+        typescript)
+            echo "*.ts *.tsx *.js *.jsx *.svelte"
+            ;;
+        *)
+            echo "*"
+            ;;
+    esac
+}
+
+get_exclude_patterns() {
+    case "$1" in
+        python)
+            echo "venv .venv __pycache__ *.pyc *.pyo .pytest_cache .mypy_cache .tox dist build *.egg-info .eggs site-packages migrations"
+            ;;
+        go)
+            echo "vendor testdata"
+            ;;
+        rust)
+            echo "target vendor"
+            ;;
+        typescript)
+            echo "node_modules dist build .next .svelte-kit out .cache .parcel-cache coverage"
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
+}
+
+get_config_files() {
+    case "$1" in
+        python)
+            echo "pyproject.toml setup.py setup.cfg requirements.txt requirements-dev.txt Pipfile Pipfile.lock poetry.lock tox.ini pytest.ini .pylintrc"
+            ;;
+        go)
+            echo "go.mod go.sum Makefile"
+            ;;
+        rust)
+            echo "Cargo.toml Cargo.lock build.rs rust-toolchain.toml"
+            ;;
+        typescript)
+            echo "package.json package-lock.json yarn.lock pnpm-lock.yaml tsconfig.json jsconfig.json .eslintrc .prettierrc webpack.config.js vite.config.js next.config.js svelte.config.js"
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
+}
+
+# Estimate tokens (approximate)
+estimate_tokens() {
+    local file="$1"
+    if [ -f "$file" ]; then
+        local chars=$(wc -c < "$file" 2>/dev/null || echo 0)
+        echo $((chars / 4))
+    else
+        echo 0
+    fi
+}
+
+# Generate file tree (excludes .git and common build dirs)
+generate_tree() {
+    if command -v tree >/dev/null 2>&1; then
+        tree -L 3 -I ".git|venv|.venv|__pycache__|node_modules|target|vendor|dist|build" -a --dirsfirst
+    else
+        find . -not -path "*/\.*" -not -path "*/venv/*" -not -path "*/node_modules/*" \
+               -not -path "*/__pycache__/*" -not -path "*/target/*" \
+               -print | sed 's|^\./||' | sort
+    fi
+}
+
+# Build rsync exclude list
+build_rsync_excludes() {
+    local lang="$1"
+    local excludes="--exclude=.git"
+    
+    # Add language-specific excludes
+    for pattern in $(get_exclude_patterns "$lang"); do
+        excludes="$excludes --exclude=$pattern"
+    done
+    
+    echo "$excludes"
+}
+
+# Generate STRUCTURE.md
+generate_structure() {
+    local lang="$1"
+    local outdir="$2"
+    local project_name="$3"
+    
+    cat > "$outdir/STRUCTURE.md" <<EOF
+# Project Structure: ${project_name}
+
+**Language:** ${lang}
+**Generated:** $(date '+%Y-%m-%d %H:%M:%S')
+
+## File Tree
+
+\`\`\`
+$(generate_tree)
+\`\`\`
+
+## Token Estimates (approximate, 1 token ≈ 4 characters)
+
+### Source Files
+EOF
+    
+    # Count tokens per source file
+    local patterns=$(get_file_patterns "$lang")
+    local total_source=0
+    
+    for pattern in $patterns; do
+        find "$outdir/src" -name "$pattern" -type f 2>/dev/null | while read -r file; do
+            tokens=$(estimate_tokens "$file")
+            if [ "$tokens" -gt 0 ]; then
+                # Make path relative to src/
+                rel_path="${file#$outdir/src/}"
+                echo "- $rel_path: ~${tokens} tokens" >> "$outdir/STRUCTURE.md"
+            fi
+        done
+    done
+    
+    # Count tokens for config files
+    cat >> "$outdir/STRUCTURE.md" <<EOF
+
+### Configuration Files
+EOF
+    
+    local config_files=$(get_config_files "$lang")
+    local total_config=0
+    
+    for file in README.md LICENSE LICENSE.md Makefile $config_files; do
+        if [ -f "$outdir/src/$file" ]; then
+            tokens=$(estimate_tokens "$outdir/src/$file")
+            echo "- $file: ~${tokens} tokens" >> "$outdir/STRUCTURE.md"
+            total_config=$((total_config + tokens))
+        fi
+    done
+    
+    # Calculate totals from the temp files
+    local source_total=0
+    for pattern in $patterns; do
+        while IFS= read -r file; do
+            chars=$(wc -c < "$file" 2>/dev/null || echo 0)
+            source_total=$((source_total + chars / 4))
+        done < <(find "$outdir/src" -name "$pattern" -type f 2>/dev/null)
+    done
+    
+    local total=$((source_total + total_config))
+    
+    cat >> "$outdir/STRUCTURE.md" <<EOF
+
+### Totals
+- Source files: ~${source_total} tokens
+- Config/docs: ~${total_config} tokens
+- **TOTAL: ~${total} tokens**
+
+## Claude Token Budget
+- Full context (190k): ~$((190000 - 30000))k tokens available for code
+- After system prompts (~30k): ~160k remaining
+- This project: ~${total} tokens ($(awk "BEGIN {printf \"%.1f\", ($total / 160000.0) * 100}")% of budget)
+
+## Recommended Workflow
+1. **Upload this tar.gz to Claude** via the attach button
+2. **Ask Claude to read STRUCTURE.md first** - Provides overview without loading all code
+3. **Work iteratively:** Claude uses \`view\` to read relevant files as needed
+4. **Updates:** Claude uses \`str_replace\` for modifications
+5. **Download:** Claude provides modified files via \`present_files\`
+
+## Tips
+- Large projects: Ask Claude to focus on specific parts
+- Token-efficient: Claude only reads what's needed with \`view\`
+- Iterative: No large paste operations = longer sessions
+- New chat: Re-upload the tar.gz file (files don't persist between chats)
+EOF
+}
+
+# Generate package README
+generate_package_readme() {
+    local lang="$1"
+    local outdir="$2"
+    local project_name="$3"
+    local timestamp="$4"
+    
+    cat > "$outdir/PACKAGE_README.md" <<EOF
+# ${project_name} - Claude Package
+
+**Packaged for Claude:** ${timestamp}
+**Language:** ${lang}
+**Tool:** src2text v${VERSION}
+
+## 📦 Contents
+
+### Source Files
+All ${lang} files from the project (excluding build artifacts and dependencies)
+
+### Configuration Files
+- README.md, LICENSE (if present)
+- Language-specific config files:
+EOF
+
+    case "$lang" in
+        python)
+            cat >> "$outdir/PACKAGE_README.md" <<EOF
+  - pyproject.toml, setup.py, requirements.txt
+  - pytest.ini, tox.ini, .pylintrc (if present)
+EOF
+            ;;
+        go)
+            cat >> "$outdir/PACKAGE_README.md" <<EOF
+  - go.mod, go.sum
+  - Makefile (if present)
+EOF
+            ;;
+        rust)
+            cat >> "$outdir/PACKAGE_README.md" <<EOF
+  - Cargo.toml, Cargo.lock
+  - build.rs, rust-toolchain.toml (if present)
+EOF
+            ;;
+        typescript)
+            cat >> "$outdir/PACKAGE_README.md" <<EOF
+  - package.json, tsconfig.json
+  - webpack/vite/next config (if present)
+EOF
+            ;;
+    esac
+
+    cat >> "$outdir/PACKAGE_README.md" <<EOF
+
+### Metadata
+- **STRUCTURE.md** - File tree and token estimates
+- **PACKAGE_README.md** - This document
+
+## 🚀 Using with Claude
+
+### Step 1: Upload
+Attach the tar.gz file using Claude's attach button
+
+### Step 2: Initial Message
+\`\`\`
+I've uploaded my ${lang} project.
+Please read STRUCTURE.md first to get an overview.
+\`\`\`
+
+### Step 3: Work Iteratively
+Describe what you want to do - Claude will read relevant files automatically
+
+## ✅ Benefits of This Method
+
+- **Token-efficient:** Files loaded only when Claude needs them
+- **Longer sessions:** 6x longer than pasting code
+- **Iterative:** Claude can read, modify, and provide updated files
+- **No code pasting:** Everything via file operations
+
+## 🔧 Automatically Excluded
+
+Common build artifacts and dependencies:
+$(get_exclude_patterns "$lang" | tr ' ' '\n' | sed 's/^/- /')
+
+Also excluded: .git, .DS_Store, IDE configs
+
+## 📊 Token Economy
+
+See STRUCTURE.md for exact token breakdown.
+
+**Budget guide:**
+- Normal text session: 50-100 messages possible
+- With this method: Full working session without running out
+- Why: Only relevant files loaded, not entire codebase every message
+
+## 🔄 Re-uploading
+
+Files don't persist between chats. When starting a new chat:
+1. Re-upload the tar.gz
+2. Claude can immediately access all files via \`view\`
+3. Continue working where you left off
+
+## 🛠️ Regenerating Package
+
+Run in your project directory:
+\`\`\`bash
+src2text ${lang}
+\`\`\`
+
+New package created in /tmp with current timestamp.
+EOF
+}
+
+# Main function
+main() {
+    # Parse arguments
+    case "${1:-}" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -v|--version)
+            echo "src2text v${VERSION}"
+            exit 0
+            ;;
+    esac
+    
+    # Detect language
+    local lang=$(detect_language "${1:-}")
+    
+    if [ "$lang" = "unknown" ]; then
+        echo -e "${RED}Error: Could not detect project language${NC}" >&2
+        echo "Please specify: python, go, rust, or typescript" >&2
         exit 1
-        ;;
-esac
+    fi
+    
+    # Project name
+    local project_name="${2:-${PWD##*/}}"
+    local timestamp=$(date +%Y%m%d-%H%M)
+    local outdir="/tmp/${timestamp}-${project_name}"
+    local tarfile="/tmp/${timestamp}-${project_name}.tar.gz"
+    
+    echo -e "${GREEN}🚀 src2text v${VERSION}${NC}"
+    echo "Project: $project_name"
+    echo "Language: $lang"
+    echo ""
+    
+    # Create output directory
+    mkdir -p "$outdir/src"
+    
+    # Copy source files with smart exclusion
+    echo "📦 Copying source files..."
+    local rsync_excludes=$(build_rsync_excludes "$lang")
+    eval rsync -a $rsync_excludes --exclude="$outdir" . "$outdir/src/" 2>/dev/null || {
+        echo -e "${RED}Error: Failed to copy files${NC}" >&2
+        rm -rf "$outdir"
+        exit 1
+    }
+    
+    # Generate metadata
+    echo "📝 Generating metadata..."
+    generate_structure "$lang" "$outdir" "$project_name"
+    generate_package_readme "$lang" "$outdir" "$project_name" "$timestamp"
+    
+    # Create tarball
+    echo "🗜️  Creating archive..."
+    tar -czf "$tarfile" -C /tmp "$(basename "$outdir")" 2>/dev/null || {
+        echo -e "${RED}Error: Failed to create tarball${NC}" >&2
+        rm -rf "$outdir"
+        exit 1
+    }
+    
+    # Cleanup
+    rm -rf "$outdir"
+    
+    # Summary
+    local size=$(du -h "$tarfile" | cut -f1)
+    echo ""
+    echo -e "${GREEN}✅ Package created successfully${NC}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "File: $tarfile"
+    echo "Size: $size"
+    echo ""
+    echo -e "${YELLOW}📋 Next steps:${NC}"
+    echo "1. Upload: $tarfile"
+    echo "2. Tell Claude: 'Read STRUCTURE.md first, then we can start working'"
+    echo ""
+    echo -e "${YELLOW}💡 Pro tip:${NC} Claude will use 'view' to read files as needed."
+    echo "   No need to paste code anymore!"
+    echo ""
+}
 
-# Common excludes
-COMMON_EXCLUDE='-not -path "*/.git/*" -not -path "*/.idea/*" -not -path "*/.vscode/*" -not -path "*/.DS_Store"'
-
-echo "Scanning $LANG files..." >&2
-echo "" >&2
-
-# Execute find
-FILES=$(eval "$FIND_CMD $EXCLUDE $COMMON_EXCLUDE" 2>/dev/null | sort)
-
-FILE_COUNT=$(echo "$FILES" | grep -c . || echo 0)
-
-if [[ $FILE_COUNT -eq 0 ]]; then
-    echo "Error: No $LANG files found" >&2
-    echo "In directory: $(pwd)" >&2
-    exit 1
-fi
-
-echo "Found $FILE_COUNT files" >&2
-
-# Token estimation
-TOTAL_CHARS=$(echo "$FILES" | xargs wc -c 2>/dev/null | tail -1 | awk '{print $1}' || echo 0)
-TOKENS=$((TOTAL_CHARS / 4))
-echo "Estimated ~${TOKENS} tokens" >&2
-
-if [[ $TOKENS -gt 150000 ]]; then
-    echo "Warning: Large codebase (>150k tokens)" >&2
-fi
-
-echo "" >&2
-echo "=== OUTPUT START ===" >&2
-echo "" >&2
-
-# Generate output
-if [[ $MAX_LINES -gt 0 ]]; then
-    echo "$FILES" | xargs awk -v max="$MAX_LINES" '
-        FNR==1 {
-            print "\n===== " FILENAME " =====\n"
-            lines=0
-        } 
-        {
-            if(lines++ < max) {
-                print
-            } else if(lines == max + 1) {
-                print "... (truncated after " max " lines)"
-            }
-        }'
-else
-    echo "$FILES" | xargs awk 'FNR==1 {print "\n===== " FILENAME " =====\n"} {print}'
-fi
-
-echo "" >&2
-echo "=== OUTPUT END ===" >&2
+# Run main
+main "$@"

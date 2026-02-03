@@ -1,32 +1,31 @@
 # src2text
 
-Concatenate source files from a project into a single text file for easy sharing and review.
+Package your codebase into Claude-friendly formats for efficient AI-assisted development.
 
-## Use Cases
+## What is src2text?
 
-- Share code context without repository access
-- Create documentation snapshots
-- Code review preparation
-- Project analysis
-- Backup of source structure
+**src2text v2** is a smart packaging tool that prepares your entire codebase for Large Language Models like Claude. Instead of manually copying files or overwhelming the AI with pasted code, src2text creates an optimized tar.gz package that enables token-efficient, iterative development workflows.
 
-## Features
+## Why src2text v2?
 
-- Auto-detects project language
-- Excludes build artifacts and dependencies
-- Token estimation for context planning
-- Optional line limiting per file
-- Platform independent (bash + standard Unix tools)
+### The Problem
+When working with AI assistants like Claude:
+- **Pasting code** = Every message includes entire history = token budget exhausted in hours
+- **Manual file selection** = Tedious and error-prone
+- **No context** = AI doesn't understand project structure
 
-## Requirements
+### The Solution
+src2text v2 creates a smart package that:
+- ✅ **Saves 6x tokens** - Files loaded only when needed via `view` commands
+- ✅ **Auto-excludes junk** - No `node_modules`, `venv`, `__pycache__`, etc.
+- ✅ **Provides context** - Generated `STRUCTURE.md` with file tree and token estimates
+- ✅ **Language-aware** - Detects Python, Go, Rust, TypeScript/JavaScript automatically
+- ✅ **Includes configs** - Grabs `pyproject.toml`, `Cargo.toml`, `package.json`, `Makefile`, etc.
 
-- bash
-- find
-- awk
-- wc
-- Standard Unix utilities
+## Version History
 
-Works on Linux, macOS, and Windows (via WSL or Git Bash).
+- **v1.x**: Generated single text file (good for ChatGPT free tier without file upload)
+- **v2.0**: Creates tar.gz packages optimized for Claude's file operations
 
 ## Installation
 ```bash
@@ -37,171 +36,303 @@ curl -O https://raw.githubusercontent.com/falkowich/src2text/main/src2text
 chmod +x src2text
 
 # Optional: Move to PATH
-mv src2text ~/bin/
+sudo mv src2text /usr/local/bin/
 ```
+
+### Requirements
+
+- bash
+- rsync
+- tar
+- Standard Unix utilities (find, wc, date)
+- Optional: `tree` (for prettier file trees)
+
+Works on Linux, macOS, and Windows (via WSL or Git Bash).
 
 ## Usage
+
+### Basic Usage
 ```bash
-# Auto-detect language and output to file
-src2text > output.txt
+# Auto-detect language
+cd my-project
+src2text
 
-# Directly to xclip
-src2text | xclip -selection c
-
-# Explicit language
-src2text python > python-code.txt
-src2text rust > rust-code.txt
-src2text go > go-code.txt
-
-# Limit lines per file (useful for large codebases)
-src2text python 500 > limited-output.txt
-
-# From specific subdirectory
-cd src/
-src2text > ../project-src.txt
+# Output: /tmp/20240203-1430-my-project.tar.gz
 ```
+
+### Specify Language
+```bash
+src2text python
+src2text go
+src2text rust
+src2text typescript
+```
+
+### Custom Output Name
+```bash
+src2text rust myapp
+# Output: /tmp/20240203-1430-myapp.tar.gz
+```
+
+### Help & Version
+```bash
+src2text --help
+src2text --version
+```
+
+## Workflow with Claude
+
+### 1. Package Your Project
+```bash
+cd ~/projects/my-app
+src2text
+# ✅ Package created: /tmp/20240203-1430-my-app.tar.gz
+```
+
+### 2. Upload to Claude
+
+- Open Claude.ai or Claude desktop app
+- Click the attach button (📎)
+- Upload the generated `.tar.gz` file
+
+### 3. Start Working
+```
+I've uploaded my Python project.
+Please read STRUCTURE.md first to get an overview.
+```
+
+### 4. Iterate Efficiently
+
+Claude will:
+- Use `view` to read files as needed (token-efficient)
+- Use `str_replace` to modify code
+- Provide updated files via `present_files`
+
+**Result:** 6x longer sessions compared to pasting code!
 
 ## Supported Languages
 
-- **Python** - .py files
-- **Go** - .go files
-- **Rust** - .rs files
-- **JavaScript** - .js, .jsx, .svelte files
-- **TypeScript** - .ts, .tsx files
+| Language | Auto-detection | Config Files Included |
+|----------|---------------|----------------------|
+| **Python** | `*.py`, `pyproject.toml`, `setup.py` | pyproject.toml, requirements.txt, setup.py, pytest.ini, tox.ini |
+| **Go** | `*.go`, `go.mod` | go.mod, go.sum, Makefile |
+| **Rust** | `*.rs`, `Cargo.toml` | Cargo.toml, Cargo.lock, build.rs, rust-toolchain.toml |
+| **TypeScript/JavaScript** | `*.ts`, `*.js`, `package.json` | package.json, tsconfig.json, webpack/vite/next configs |
 
 ## What Gets Excluded
 
 ### Python
-- venv/, .venv/
-- __pycache__/
-- migrations/
-- site-packages/
-- .pytest_cache/
+```
+venv/ .venv/ __pycache__/ *.pyc *.pyo
+.pytest_cache/ .mypy_cache/ .tox/
+dist/ build/ *.egg-info/ site-packages/
+```
 
 ### Go
-- vendor/
-- testdata/
+```
+vendor/ testdata/
+```
 
 ### Rust
-- target/
-- vendor/
-
-### JavaScript/TypeScript
-- node_modules/
-- dist/, build/
-- .svelte-kit/, .next/
-
-### Common (all languages)
-- .git/
-- .idea/, .vscode/
-- .DS_Store
-
-## Output Format
 ```
-===== ./src/main.py =====
-
-[file contents]
-
-===== ./src/utils.py =====
-
-[file contents]
+target/ vendor/
 ```
 
-Each file is prefixed with its relative path for easy identification.
+### TypeScript/JavaScript
+```
+node_modules/ dist/ build/
+.next/ .svelte-kit/ out/
+.cache/ .parcel-cache/ coverage/
+```
+
+### Always Excluded
+```
+.git/ .DS_Store
+.idea/ .vscode/
+```
+
+## Package Contents
+
+Each package contains:
+```
+YYYYMMDD-HHMM-projectname/
+├── src/                    # Your source files
+│   ├── main.py
+│   ├── lib/
+│   └── ...
+├── STRUCTURE.md           # File tree + token estimates
+└── PACKAGE_README.md      # Usage instructions
+```
+
+### STRUCTURE.md Example
+```markdown
+# Project Structure: my-app
+
+**Language:** python
+**Generated:** 2024-02-03 14:30:00
+
+## File Tree
+[complete tree here]
+
+## Token Estimates
+### Source Files
+- main.py: ~245 tokens
+- lib/parser.py: ~512 tokens
+
+### Configuration Files
+- pyproject.toml: ~89 tokens
+- README.md: ~156 tokens
+
+### Totals
+- Source files: ~4,230 tokens
+- Config/docs: ~245 tokens
+- TOTAL: ~4,475 tokens (2.8% of Claude's 160k budget)
+
+## Recommended Workflow
+1. Upload this tar.gz to Claude
+2. Ask Claude to read STRUCTURE.md first
+3. Work iteratively with view/str_replace
+```
+
+## Token Economy
+
+### Without src2text (pasting code):
+```
+Message 1: 30k (system) + 2k (code) + 1k (your text) = 33k
+Message 2: 30k + 2k + 1k + 2k (previous) = 35k
+Message 3: 30k + 2k + 1k + 2k + 2k + 1k = 38k
+...
+After 15 messages: ~60-80k tokens = Budget exhausted
+```
+
+### With src2text (file operations):
+```
+Message 1: 30k (system) + 1k (your text) = 31k
+Message 2: 30k + 1k + 200 (view command) = 31.2k
+Message 3: 30k + 1k + 200 + 200 = 31.4k
+...
+After 15 messages: ~35k tokens = Budget healthy
+```
+
+**Result:** ~6x more messages possible!
 
 ## Examples
 
-### Basic usage
+### Python Project
 ```bash
-cd my-project
-src2text > my-project.txt
+cd ~/projects/django-app
+src2text python
+# Includes: pyproject.toml, requirements.txt, all .py files
+# Excludes: venv/, __pycache__/, migrations/
 ```
 
-### Share Python project
+### Go Service
 ```bash
-cd django-app
-src2text python > django-app-src.txt
-# Share django-app-src.txt via email, chat, etc.
+cd ~/projects/microservice
+src2text go
+# Includes: go.mod, go.sum, Makefile, all .go files
+# Excludes: vendor/, testdata/
 ```
 
-### Large codebase with limiting
+### Rust Application
 ```bash
-cd large-monorepo
-src2text rust 500 > partial-rust-code.txt
+cd ~/projects/cli-tool
+src2text rust
+# Includes: Cargo.toml, Cargo.lock, all .rs files
+# Excludes: target/
 ```
 
-## Token Estimation
-
-The script estimates tokens using the approximation: 1 token ≈ 4 characters.
-
-This is useful for planning context windows when sharing with text analysis tools.
-
-## Privacy Note
-
-This tool does NOT:
-- Upload anything to external services
-- Require network access (except for installation)
-- Store or cache any data
-- Depend on external APIs
-
-Output goes to stdout. You control what happens with the result.
-
-## Why Not Use X?
-
-**Why not just tar/zip?**
-- Text format is easier to review
-- No extraction needed
-- Works in environments without archive tools
-
-**Why not use git archive?**
-- Works on non-git projects
-- Excludes build artifacts automatically
-- Provides token estimation
-
-**Why not copy-paste?**
-- Consistent formatting
-- Handles many files efficiently
-- Maintains file structure information
+### TypeScript/React App
+```bash
+cd ~/projects/webapp
+src2text typescript
+# Includes: package.json, tsconfig.json, all .ts/.tsx files
+# Excludes: node_modules/, dist/, .next/
+```
 
 ## Philosophy
 
-- Simple Unix tools over complex dependencies
-- Stdout over file manipulation
-- Auto-detection over configuration
-- Platform independence
+- **Simple Unix tools** over complex dependencies
+- **Auto-detection** over configuration
+- **Platform independence** - Works everywhere bash works
+- **Token efficiency** - Designed for LLM context windows
+
+## Comparison to Alternatives
+
+| Tool | Output | Best For |
+|------|--------|----------|
+| **src2text v2** | tar.gz with structure | Claude (file operations) |
+| **Repomix** | XML text file | General LLM sharing |
+| **Copy-paste** | Manual | Quick questions |
+
+## Tips
+
+### For Large Projects
+```bash
+# Focus Claude on specific subdirectories
+"Focus on the src/api/ directory for now"
+```
+
+### For Long Sessions
+```bash
+# Start fresh when needed
+"Let's start a new chat and continue with X"
+```
+
+### For Iterative Development
+```bash
+# Let Claude work incrementally
+"Fix the parser first, then we'll move to the renderer"
+```
+
+## Troubleshooting
+
+### "Could not detect project language"
+```bash
+# Explicitly specify language
+src2text python
+```
+
+### Package too large
+```bash
+# Check what's included
+tar -tzf /tmp/20240203-1430-project.tar.gz | head -20
+
+# Manually exclude more
+# Edit the script's get_exclude_patterns function
+```
+
+### Missing tree command
+```bash
+# Install tree (optional, not required)
+# macOS
+brew install tree
+
+# Ubuntu/Debian
+sudo apt install tree
+
+# src2text works without tree, just uses find instead
+```
 
 ## Contributing
 
-This is a personal tool. Fork it and make it yours.
+This is a personal tool that evolved from practical needs. Feel free to:
+- Fork and adapt for your workflow
+- Submit issues for bugs
+- Suggest improvements via PRs
+
+Keep it simple, keep it bash.
 
 ## License
 
-Public domain. Use it, modify it, distribute it.
-```
+Public domain (Unlicense). Use it, modify it, distribute it.
 
-## LICENSE (valfri)
-```
-This is free and unencumbered software released into the public domain.
+## Links
 
-Anyone is free to copy, modify, publish, use, compile, sell, or
-distribute this software, either in source code form or as a compiled
-binary, for any purpose, commercial or non-commercial, and by any
-means.
+- **Repository:** https://github.com/falkowich/src2text
+- **Issues:** https://github.com/falkowich/src2text/issues
+- **Related:** [Repomix](https://github.com/yamadashy/repomix), [Context Tools](https://github.com/context-hub/generator)
 
-In jurisdictions that recognize copyright laws, the author or authors
-of this software dedicate any and all copyright interest in the
-software to the public domain. We make this dedication for the benefit
-of the public at large and to the detriment of our heirs and
-successors. We intend this dedication to be an overt act of
-relinquishment in perpetuity of all present and future rights to this
-software under copyright law.
+---
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
-OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-OTHER DEALINGS IN THE SOFTWARE.
-
-For more information, please refer to <https://unlicense.org>
+**Remember:** Upload the tar.gz, ask Claude to read STRUCTURE.md first, then work iteratively. No more token budget surprises! 🚀
