@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# src2text - Concatenate source files into single text output
+# Usage: src2text [python|go|rust|js|typescript|auto] [max_lines_per_file]
+
+set -euo pipefail
+
+# Language configurations
+declare -A LANG_EXTS=(
+    [python]="*.py"
+    [go]="*.go"
+    [rust]="*.rs"
+    [js]="*.js *.jsx *.svelte"
+    [typescript]="*.ts *.tsx"
+)
+
+declare -A LANG_EXCLUDE=(
+    [python]="-not -path */venv/* -not -path */__pycache__/* -not -path */migrations/* -not -path */.venv/* -not -path */site-packages/* -not -path */.pytest_cache/*"
+    [go]="-not -path */vendor/* -not -path */testdata/*"
+    [rust]="-not -path */target/* -not -path */vendor/*"
+    [js]="-not -path */node_modules/* -not -path */dist/* -not -path */build/* -not -path */.svelte-kit/* -not -path */.next/*"
+    [typescript]="-not -path */node_modules/* -not -path */dist/* -not -path */build/* -not -path */.next/*"
+)
+
+# Common excludes for all languages
+COMMON_EXCLUDE="-not -path */.git/* -not -path */.idea/* -not -path */.vscode/* -not -path */.DS_Store"
+
+# Auto-detect language based on project markers
+detect_lang() {
+    if [[ -f "Cargo.toml" ]]; then 
+        echo "rust"
+    elif [[ -f "go.mod" ]]; then 
+        echo "go"
+    elif [[ -f "package.json" ]]; then
+        if [[ -f "tsconfig.json" ]] || grep -q '"typescript"' package.json 2>/dev/null; then
+            echo "typescript"
+        else
+            echo "js"
+        fi
+    elif [[ -f "pyproject.toml" ]] || [[ -f "setup.py" ]] || [[ -f "requirements.txt" ]]; then 
+        echo "python"
+    else 
+        echo "python"
+    fi
+}
+
+# Parse arguments
+LANG="${1:-auto}"
+MAX_LINES="${2:-0}"
+
+if [[ "$LANG" == "auto" ]]; then
+    LANG=$(detect_lang)
+    echo "Auto-detected: $LANG" >&2
+fi
+
+# Validate language
+if [[ ! ${LANG_EXTS[$LANG]+_} ]]; then
+    cat >&2 << 'USAGE'
+Error: Unknown language
+
+Usage: src2text [LANGUAGE] [MAX_LINES]
+
+Languages:
+  python, go, rust, js, typescript, auto
+
+Examples:
+  src2text                    # Auto-detect language
+  src2text python             # Explicit language
+  src2text rust 500           # Limit to 500 lines per file
+  src2text > output.txt       # Save to file
+USAGE
+    exit 1
+fi
+
+EXT="${LANG_EXTS[$LANG]}"
+EXCLUDE="${LANG_EXCLUDE[$LANG]}"
+
+echo "Scanning $LANG files ($EXT)..." >&2
+echo "" >&2
+
+# Build find command
+FIND_CMD="find . -type f"
+for pattern in $EXT; do
+    FIND_CMD="$FIND_CMD -o -name '$pattern'"
+done
+FIND_CMD="${FIND_CMD# -o }"
+
+# Execute find with excludes
+FILES=$(eval "$FIND_CMD" $EXCLUDE $COMMON_EXCLUDE 2>/dev/null | sort)
+
+FILE_COUNT=$(echo "$FILES" | grep -c . || echo 0)
+
+if [[ $FILE_COUNT -eq 0 ]]; then
+    echo "Error: No $LANG files found" >&2
+    echo "" >&2
+    echo "Searched for: $EXT" >&2
+    echo "In directory: $(pwd)" >&2
+    exit 1
+fi
+
+echo "Found $FILE_COUNT files" >&2
+
+# Character count and token estimation
+TOTAL_CHARS=$(echo "$FILES" | xargs wc -c 2>/dev/null | tail -1 | awk '{print $1}' || echo 0)
+TOKENS=$((TOTAL_CHARS / 4))
+
+echo "Estimated ~${TOKENS} tokens" >&2
+
+if [[ $TOKENS -gt 150000 ]]; then
+    echo "Warning: Large codebase (>150k tokens)" >&2
+    echo "Consider filtering or limiting lines per file" >&2
+fi
+
+echo "" >&2
+echo "=== OUTPUT START ===" >&2
+echo "" >&2
+
+# Generate concatenated output
+if [[ $MAX_LINES -gt 0 ]]; then
+    echo "$FILES" | xargs awk -v max="$MAX_LINES" '
+        FNR==1 {
+            print "\n===== " FILENAME " =====\n"
+            lines=0
+        } 
+        {
+            if(lines++ < max) {
+                print
+            } else if(lines == max + 1) {
+                print "... (truncated after " max " lines)"
+            }
+        }'
+else
+    echo "$FILES" | xargs awk 'FNR==1 {print "\n===== " FILENAME " =====\n"} {print}'
+fi
+
+echo "" >&2
+echo "=== OUTPUT END ===" >&2
+echo "Done. Output sent to stdout" >&2
