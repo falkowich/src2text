@@ -9,8 +9,8 @@ declare -A LANG_EXTS=(
     [python]="*.py"
     [go]="*.go"
     [rust]="*.rs"
-    [js]="*.js *.jsx *.svelte"
-    [typescript]="*.ts *.tsx"
+    [js]="*.js|*.jsx|*.svelte"
+    [typescript]="*.ts|*.tsx"
 )
 
 declare -A LANG_EXCLUDE=(
@@ -77,15 +77,22 @@ EXCLUDE="${LANG_EXCLUDE[$LANG]}"
 echo "Scanning $LANG files ($EXT)..." >&2
 echo "" >&2
 
-# Build find command
-FIND_CMD="find . -type f"
-for pattern in $EXT; do
-    FIND_CMD="$FIND_CMD -o -name '$pattern'"
+# Build find command - FIXED VERSION
+FIND_CMD="find . -type f \\("
+first=true
+IFS='|' read -ra PATTERNS <<< "$EXT"
+for pattern in "${PATTERNS[@]}"; do
+    if [[ "$first" == true ]]; then
+        FIND_CMD="$FIND_CMD -name '$pattern'"
+        first=false
+    else
+        FIND_CMD="$FIND_CMD -o -name '$pattern'"
+    fi
 done
-FIND_CMD="${FIND_CMD# -o }"
+FIND_CMD="$FIND_CMD \\) $EXCLUDE $COMMON_EXCLUDE"
 
 # Execute find with excludes
-FILES=$(eval "$FIND_CMD" $EXCLUDE $COMMON_EXCLUDE 2>/dev/null | sort)
+FILES=$(eval "$FIND_CMD" 2>/dev/null | sort)
 
 FILE_COUNT=$(echo "$FILES" | grep -c . || echo 0)
 
