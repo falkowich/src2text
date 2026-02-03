@@ -36,7 +36,7 @@ curl -O https://raw.githubusercontent.com/falkowich/src2text/main/src2text
 chmod +x src2text
 
 # Optional: Move to PATH
-sudo mv src2text /usr/local/bin/
+mv src2text ~/bin/
 ```
 
 ### Requirements
