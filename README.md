@@ -45,6 +45,9 @@ mv src2text ~/bin/
 # Auto-detect language and output to file
 src2text > output.txt
 
+# Directly to xclip
+src2text | xclip -selection c
+
 # Explicit language
 src2text python > python-code.txt
 src2text rust > rust-code.txt
